@@ -1,0 +1,59 @@
+.quote-tts-wrap {
+    position: relative;
+    display: inline;
+}
+
+.quote-tts-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--SmartThemeQuoteColor, #aaa);
+    opacity: 0.5;
+    vertical-align: super;
+    margin-left: 1px;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.quote-tts-btn:hover {
+    opacity: 1;
+    color: var(--active, #7b7);
+}
+
+.quote-tts-btn.playing {
+    opacity: 1;
+    color: var(--active, #7b7);
+    animation: quote-tts-pulse 1s infinite;
+}
+
+@keyframes quote-tts-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.quote-tts-download {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+    cursor: pointer;
+    color: var(--SmartThemeQuoteColor, #aaa);
+    opacity: 0;
+    vertical-align: super;
+    margin-left: 1px;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.quote-tts-download.visible {
+    opacity: 0.5;
+}
+
+.quote-tts-download:hover {
+    opacity: 1;
+    color: var(--active, #7b7);
+}
