@@ -1,5 +1,5 @@
 import { eventSource, event_types, saveSettingsDebounced } from '../../../../script.js';
-import { extension_settings, renderExtensionTemplateAsync } from '../../../extensions.js';
+import { extension_settings } from '../../../extensions.js';
 
 const EXT_NAME = 'quote-tts';
 
@@ -285,7 +285,39 @@ function renderPatternsList() {
 }
 
 async function addExtensionControls() {
-    const settingsHtml = $(await renderExtensionTemplateAsync('third-party/quote-tts', 'settings'));
+    const settingsHtml = $(`
+        <div class="quote-tts-settings">
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <b>Quote TTS</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <label class="checkbox_label" for="quote_tts_enabled">
+                        <input type="checkbox" id="quote_tts_enabled">
+                        <small>Enable</small>
+                    </label>
+                    <label class="checkbox_label" for="quote_tts_include_quotes">
+                        <input type="checkbox" id="quote_tts_include_quotes">
+                        <small>Include quote marks in TTS</small>
+                    </label>
+                    <hr>
+                    <span>Enabled quote formats:</span>
+                    <div id="quote_tts_patterns_list" style="display:flex;flex-direction:column;gap:4px"></div>
+                    <hr>
+                    <span>Add custom quote format:</span>
+                    <div class="flex-container" style="gap:6px;align-items:center;margin-top:4px">
+                        <input id="quote_tts_new_open" type="text" class="text_pole" placeholder="Open" style="width:60px" maxlength="4">
+                        <span>...</span>
+                        <input id="quote_tts_new_close" type="text" class="text_pole" placeholder="Close" style="width:60px" maxlength="4">
+                        <div id="quote_tts_add_btn" class="menu_button" style="padding:4px 10px" title="Add">
+                            <i class="fa-solid fa-plus"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `);
     $('#extensions_settings2').append(settingsHtml);
 
     const settings = getSettings();
