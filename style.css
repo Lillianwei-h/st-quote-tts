@@ -53,7 +53,32 @@
     opacity: 0.5;
 }
 
-.quote-tts-download:hover {
+.quote-tts-download:hover,
+.quote-tts-regen:hover {
     opacity: 1;
     color: var(--active, #7b7);
+}
+
+.quote-tts-regen {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+    cursor: pointer;
+    color: var(--SmartThemeQuoteColor, #aaa);
+    opacity: 0;
+    vertical-align: super;
+    margin-left: 1px;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.quote-tts-regen.visible {
+    opacity: 0.5;
+}
+
+.quote-tts-btn.has-cache {
+    color: var(--active, #7b7);
+    opacity: 0.7;
 }

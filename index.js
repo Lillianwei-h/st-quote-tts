@@ -13,6 +13,7 @@ const DEFAULT_PATTERNS = [
 
 let currentAudio = null;
 let quoteRegex = null;
+const audioCache = new Map();
 
 function getSettings() {
     if (!extension_settings[EXT_NAME]) {
@@ -79,7 +80,7 @@ function processMessageElement(mesEl) {
 
             const btn = document.createElement('span');
             btn.className = 'quote-tts-btn fa-solid fa-volume-high';
-            btn.title = 'Read aloud';
+            btn.title = 'Play';
             btn.dataset.ttsText = innerText;
             btn.dataset.ttsTextFull = fullQuote;
             wrap.appendChild(btn);
@@ -88,6 +89,11 @@ function processMessageElement(mesEl) {
             dlBtn.className = 'quote-tts-download fa-solid fa-download';
             dlBtn.title = 'Download audio';
             wrap.appendChild(dlBtn);
+
+            const regenBtn = document.createElement('span');
+            regenBtn.className = 'quote-tts-regen fa-solid fa-rotate';
+            regenBtn.title = 'Regenerate';
+            wrap.appendChild(regenBtn);
 
             frag.appendChild(wrap);
             lastIdx = match.index + fullQuote.length;
@@ -128,66 +134,99 @@ function getCharNameFromMessage(mesEl) {
     return mesEl.getAttribute('ch_name') || SillyTavern.getContext().name2 || '';
 }
 
-async function speakText(text, charName, btn, dlBtn) {
+function stopCurrentAudio() {
     if (currentAudio) {
         currentAudio.pause();
         currentAudio = null;
         document.querySelectorAll('.quote-tts-btn.playing').forEach(el => el.classList.remove('playing'));
     }
+}
 
+async function generateAudio(text, charName) {
+    const ttsSettings = extension_settings.tts;
+    console.log('[QuoteTTS] TTS settings:', ttsSettings?.currentProvider, ttsSettings);
+    if (!ttsSettings || !ttsSettings.currentProvider) {
+        toastr.warning('TTS provider not configured. Please set up TTS in extensions first.');
+        return null;
+    }
+
+    const providerName = ttsSettings.currentProvider;
+    const providerSettings = ttsSettings[providerName];
+    console.log('[QuoteTTS] Provider:', providerName, 'Settings:', providerSettings);
+
+    if (providerName.toLowerCase().includes('sovits')) {
+        return await callGptSovits(text, providerSettings);
+    } else if (providerName === 'XTTSv2') {
+        return await callXtts(text, charName, providerSettings);
+    } else {
+        console.warn('[QuoteTTS] Unknown provider:', JSON.stringify(providerName), '- using fallback narrate');
+        await fallbackNarrate(text, charName);
+        return null;
+    }
+}
+
+function cacheAudio(wrap, url) {
+    const btn = wrap.querySelector('.quote-tts-btn');
+    const dlBtn = wrap.querySelector('.quote-tts-download');
+    const regenBtn = wrap.querySelector('.quote-tts-regen');
+
+    const oldUrl = audioCache.get(wrap);
+    if (oldUrl) URL.revokeObjectURL(oldUrl);
+
+    audioCache.set(wrap, url);
+    btn.classList.add('has-cache');
+    dlBtn.classList.add('visible');
+    regenBtn.classList.add('visible');
+
+    dlBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tts_${Date.now()}.wav`;
+        a.click();
+    };
+}
+
+async function playUrl(url, btn) {
+    stopCurrentAudio();
+    btn.classList.add('playing');
+    const audio = new Audio(url);
+    currentAudio = audio;
+    audio.addEventListener('ended', () => { btn.classList.remove('playing'); currentAudio = null; });
+    audio.addEventListener('error', (e) => { console.error('[QuoteTTS] Audio error:', e); btn.classList.remove('playing'); currentAudio = null; toastr.error('Audio playback failed'); });
+    try {
+        await audio.play();
+    } catch (e) {
+        console.error('[QuoteTTS] Play failed:', e);
+        btn.classList.remove('playing');
+        currentAudio = null;
+    }
+}
+
+async function onPlayClick(wrap, charName, forceRegen) {
+    console.log('[QuoteTTS] onPlayClick called, forceRegen:', forceRegen);
+    const btn = wrap.querySelector('.quote-tts-btn');
+    const settings = getSettings();
+    const text = settings.includeQuotes ? btn.dataset.ttsTextFull : btn.dataset.ttsText;
+    console.log('[QuoteTTS] Text to speak:', text, 'charName:', charName);
+
+    const cached = audioCache.get(wrap);
+    if (cached && !forceRegen) {
+        console.log('[QuoteTTS] Playing from cache');
+        await playUrl(cached, btn);
+        return;
+    }
+
+    stopCurrentAudio();
     btn.classList.add('playing');
 
     try {
-        const ttsSettings = extension_settings.tts;
-        if (!ttsSettings || !ttsSettings.currentProvider) {
-            toastr.warning('TTS provider not configured. Please set up TTS in extensions first.');
-            btn.classList.remove('playing');
-            return;
-        }
+        const blob = await generateAudio(text, charName);
+        console.log('[QuoteTTS] generateAudio returned:', blob);
+        if (!blob) { btn.classList.remove('playing'); return; }
 
-        const providerName = ttsSettings.currentProvider;
-        const providerSettings = ttsSettings[providerName];
-        let audioBlob = null;
-
-        if (providerName === 'GPT-SoVITS (Unofficial)' || providerName === 'GPT-SoVITS v2') {
-            audioBlob = await callGptSovits(text, providerSettings);
-        } else if (providerName === 'XTTSv2') {
-            audioBlob = await callXtts(text, charName, providerSettings);
-        } else {
-            await fallbackNarrate(text, charName);
-            btn.classList.remove('playing');
-            return;
-        }
-
-        if (!audioBlob) {
-            toastr.error('TTS generation failed');
-            btn.classList.remove('playing');
-            return;
-        }
-
-        const url = URL.createObjectURL(audioBlob);
-        const audio = new Audio(url);
-        currentAudio = audio;
-
-        dlBtn.classList.add('visible');
-        dlBtn.onclick = () => {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `tts_${Date.now()}.wav`;
-            a.click();
-        };
-
-        audio.addEventListener('ended', () => {
-            btn.classList.remove('playing');
-            currentAudio = null;
-        });
-        audio.addEventListener('error', () => {
-            btn.classList.remove('playing');
-            currentAudio = null;
-            toastr.error('Audio playback failed');
-        });
-
-        await audio.play();
+        const url = URL.createObjectURL(blob);
+        cacheAudio(wrap, url);
+        await playUrl(url, btn);
     } catch (err) {
         console.error('[QuoteTTS] Error:', err);
         btn.classList.remove('playing');
@@ -197,18 +236,27 @@ async function speakText(text, charName, btn, dlBtn) {
 
 async function callGptSovits(text, settings) {
     const url = settings?.provider_endpoint || 'http://localhost:9880';
-    const lang = settings?.text_lang || settings?.language || 'en';
-    const body = { text, text_language: lang, text_lang: lang };
-    if (settings?.prompt_text) body.prompt_text = settings.prompt_text;
-    if (settings?.prompt_lang) body.prompt_lang = settings.prompt_lang;
-    if (settings?.ref_audio_path) body.ref_audio_path = settings.ref_audio_path;
+    const body = {
+        text: text,
+        text_lang: settings?.text_lang || 'en',
+        prompt_lang: settings?.prompt_lang || 'en',
+        prompt_text: settings?.prompt_text || "We left as soon as we came, though it's no skin off my nose in any case.",
+        ref_audio_path: settings?.ref_audio_path || '',
+        streaming_mode: 'false',
+    };
+
+    console.debug('[QuoteTTS] Requesting TTS:', url, body);
 
     const response = await fetch(`${url}/tts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(`GPT-SoVITS returned ${response.status}`);
+    if (!response.ok) {
+        const errText = await response.text();
+        console.error('[QuoteTTS] TTS response error:', response.status, errText);
+        throw new Error(`GPT-SoVITS returned ${response.status}`);
+    }
     return await response.blob();
 }
 
@@ -387,12 +435,18 @@ export async function init() {
 
     $(document).on('click', '.quote-tts-btn', function (e) {
         e.stopPropagation();
-        const settings = getSettings();
-        const text = settings.includeQuotes ? this.dataset.ttsTextFull : this.dataset.ttsText;
+        const wrap = this.closest('.quote-tts-wrap');
         const mesEl = $(this).closest('.mes')[0];
         const charName = getCharNameFromMessage(mesEl);
-        const dlBtn = this.nextElementSibling;
-        speakText(text, charName, this, dlBtn);
+        onPlayClick(wrap, charName, false);
+    });
+
+    $(document).on('click', '.quote-tts-regen', function (e) {
+        e.stopPropagation();
+        const wrap = this.closest('.quote-tts-wrap');
+        const mesEl = $(this).closest('.mes')[0];
+        const charName = getCharNameFromMessage(mesEl);
+        onPlayClick(wrap, charName, true);
     });
 
     processAllMessages();
