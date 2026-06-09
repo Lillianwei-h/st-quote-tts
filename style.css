@@ -82,3 +82,50 @@
     color: var(--active, #7b7);
     opacity: 0.7;
 }
+
+.quote-tts-stream-panel {
+    position: fixed;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    background: var(--SmartThemeBlurTintColor, #1a1a2e);
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    max-height: 50vh;
+    overflow-y: auto;
+    max-width: 280px;
+}
+
+.quote-tts-stream-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+    font-size: 0.9em;
+}
+
+.quote-tts-stream-item:hover {
+    opacity: 1;
+}
+
+.quote-tts-stream-item .fa-volume-high {
+    font-size: 11px;
+    color: var(--SmartThemeQuoteColor, #aaa);
+}
+
+.quote-tts-stream-item .quote-preview {
+    color: var(--SmartThemeQuoteColor, #bbb);
+    font-style: italic;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+}

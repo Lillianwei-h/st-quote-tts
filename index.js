@@ -14,6 +14,7 @@ const DEFAULT_PATTERNS = [
 let currentAudio = null;
 let quoteRegex = null;
 const audioCache = new Map();
+let streamingObserver = null;
 
 function getSettings() {
     if (!extension_settings[EXT_NAME]) {
@@ -51,7 +52,13 @@ function processMessageElement(mesEl) {
     if (!textEl || textEl.dataset.quoteTtsProcessed) return;
     textEl.dataset.quoteTtsProcessed = '1';
 
-    const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT, null);
+    const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            return node.parentElement?.closest('.quote-tts-wrap')
+                ? NodeFilter.FILTER_REJECT
+                : NodeFilter.FILTER_ACCEPT;
+        },
+    });
     const textNodes = [];
     let node;
     while ((node = walker.nextNode())) textNodes.push(node);
@@ -96,6 +103,7 @@ function processMessageElement(mesEl) {
             wrap.appendChild(regenBtn);
 
             frag.appendChild(wrap);
+            restoreCacheState(wrap);
             lastIdx = match.index + fullQuote.length;
         }
 
@@ -165,15 +173,23 @@ async function generateAudio(text, charName) {
     }
 }
 
+function getCacheKey(wrap) {
+    const btn = wrap.querySelector('.quote-tts-btn');
+    return btn ? btn.dataset.ttsText : null;
+}
+
 function cacheAudio(wrap, url) {
+    const key = getCacheKey(wrap);
+    if (!key) return;
+
     const btn = wrap.querySelector('.quote-tts-btn');
     const dlBtn = wrap.querySelector('.quote-tts-download');
     const regenBtn = wrap.querySelector('.quote-tts-regen');
 
-    const oldUrl = audioCache.get(wrap);
+    const oldUrl = audioCache.get(key);
     if (oldUrl) URL.revokeObjectURL(oldUrl);
 
-    audioCache.set(wrap, url);
+    audioCache.set(key, url);
     btn.classList.add('has-cache');
     dlBtn.classList.add('visible');
     regenBtn.classList.add('visible');
@@ -186,15 +202,40 @@ function cacheAudio(wrap, url) {
     };
 }
 
+function restoreCacheState(wrap) {
+    const key = getCacheKey(wrap);
+    if (!key || !audioCache.has(key)) return;
+
+    const btn = wrap.querySelector('.quote-tts-btn');
+    const dlBtn = wrap.querySelector('.quote-tts-download');
+    const regenBtn = wrap.querySelector('.quote-tts-regen');
+    const url = audioCache.get(key);
+
+    btn.classList.add('has-cache');
+    dlBtn.classList.add('visible');
+    regenBtn.classList.add('visible');
+    dlBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tts_${Date.now()}.wav`;
+        a.click();
+    };
+}
+
 async function playUrl(url, btn) {
+    console.log('[QuoteTTS] playUrl called, url:', url);
     stopCurrentAudio();
     btn.classList.add('playing');
     const audio = new Audio(url);
     currentAudio = audio;
+
+    audio.addEventListener('loadeddata', () => console.log('[QuoteTTS] Audio loaded, duration:', audio.duration));
     audio.addEventListener('ended', () => { btn.classList.remove('playing'); currentAudio = null; });
-    audio.addEventListener('error', (e) => { console.error('[QuoteTTS] Audio error:', e); btn.classList.remove('playing'); currentAudio = null; toastr.error('Audio playback failed'); });
+    audio.addEventListener('error', (e) => { console.error('[QuoteTTS] Audio error:', audio.error); btn.classList.remove('playing'); currentAudio = null; toastr.error('Audio playback failed'); });
+
     try {
         await audio.play();
+        console.log('[QuoteTTS] Play started successfully');
     } catch (e) {
         console.error('[QuoteTTS] Play failed:', e);
         btn.classList.remove('playing');
@@ -209,7 +250,8 @@ async function onPlayClick(wrap, charName, forceRegen) {
     const text = settings.includeQuotes ? btn.dataset.ttsTextFull : btn.dataset.ttsText;
     console.log('[QuoteTTS] Text to speak:', text, 'charName:', charName);
 
-    const cached = audioCache.get(wrap);
+    const cacheKey = getCacheKey(wrap);
+    const cached = cacheKey ? audioCache.get(cacheKey) : null;
     if (cached && !forceRegen) {
         console.log('[QuoteTTS] Playing from cache');
         await playUrl(cached, btn);
@@ -417,11 +459,124 @@ async function addExtensionControls() {
 
 function onMessageRendered(messageId) {
     const mesEl = document.querySelector(`#chat .mes[mesid="${messageId}"]`);
-    if (mesEl) processMessageElement(mesEl);
+    if (!mesEl) return;
+    const panel = document.querySelector(`.quote-tts-stream-panel[data-mesid="${messageId}"]`);
+    if (panel) panel.remove();
+    processMessageElement(mesEl);
 }
 
 function processAllMessages() {
     document.querySelectorAll('#chat .mes').forEach(mesEl => processMessageElement(mesEl));
+}
+
+function findQuotesInText(text) {
+    if (!quoteRegex) return [];
+    const quotes = [];
+    quoteRegex.lastIndex = 0;
+    let match;
+    while ((match = quoteRegex.exec(text)) !== null) {
+        const fullQuote = match[0];
+        const innerText = match.slice(2).find(g => g !== undefined) || fullQuote.slice(1, -1);
+        quotes.push({ fullQuote, innerText });
+    }
+    return quotes;
+}
+
+function updateStreamPanel(mesEl) {
+    const settings = getSettings();
+    if (!settings.enabled || !quoteRegex) return;
+
+    const textEl = mesEl.querySelector('.mes_text');
+    if (!textEl) return;
+
+    if (textEl.dataset.quoteTtsProcessed) return;
+
+    const rawText = textEl.textContent || '';
+    const quotes = findQuotesInText(rawText);
+
+    const mesid = mesEl.getAttribute('mesid');
+    let panel = document.querySelector(`.quote-tts-stream-panel[data-mesid="${mesid}"]`);
+
+    if (quotes.length === 0) {
+        if (panel) panel.remove();
+        return;
+    }
+
+    const existingKeys = panel ? new Set(
+        [...panel.querySelectorAll('.quote-tts-stream-item')].map(el => el.dataset.text)
+    ) : new Set();
+
+    const newKeys = new Set(quotes.map(q => q.innerText));
+    if (panel && existingKeys.size === newKeys.size && [...newKeys].every(k => existingKeys.has(k))) {
+        return;
+    }
+
+    if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'quote-tts-stream-panel';
+        panel.dataset.mesid = mesEl.getAttribute('mesid');
+        document.body.appendChild(panel);
+    }
+
+    panel.innerHTML = '';
+    for (const q of quotes) {
+        const item = document.createElement('div');
+        item.className = 'quote-tts-stream-item';
+        item.dataset.text = q.innerText;
+        item.dataset.fullText = q.fullQuote;
+        item.innerHTML = `<span class="fa-solid fa-volume-high"></span><span class="quote-preview"></span>`;
+        item.querySelector('.quote-preview').textContent = q.fullQuote;
+        panel.appendChild(item);
+    }
+}
+
+function removeStreamPanels() {
+    document.querySelectorAll('.quote-tts-stream-panel').forEach(el => el.remove());
+}
+
+function initStreamingObserver() {
+    if (streamingObserver) streamingObserver.disconnect();
+
+    const chatEl = document.getElementById('chat');
+    if (!chatEl) return;
+
+    let throttleTimer = null;
+    let pendingMessages = new Set();
+
+    streamingObserver = new MutationObserver((mutations) => {
+        const settings = getSettings();
+        if (!settings.enabled || !quoteRegex) return;
+
+        for (const mutation of mutations) {
+            const el = mutation.target.nodeType === Node.TEXT_NODE
+                ? mutation.target.parentElement
+                : mutation.target;
+            if (!el) continue;
+            const mesText = el.closest('.mes_text') || (el.classList?.contains('mes_text') ? el : null);
+            if (!mesText) continue;
+            const mesEl = mesText.closest('.mes');
+            if (mesEl) pendingMessages.add(mesEl);
+        }
+
+        if (pendingMessages.size === 0) return;
+
+        if (!throttleTimer) {
+            throttleTimer = setTimeout(() => {
+                throttleTimer = null;
+                const toProcess = pendingMessages;
+                pendingMessages = new Set();
+                for (const mesEl of toProcess) {
+                    updateStreamPanel(mesEl);
+                }
+            }, 300);
+        }
+    });
+
+    streamingObserver.observe(chatEl, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+    });
 }
 
 export async function init() {
@@ -449,5 +604,37 @@ export async function init() {
         onPlayClick(wrap, charName, true);
     });
 
+    $(document).on('click', '.quote-tts-stream-item', function (e) {
+        e.stopPropagation();
+        const text = getSettings().includeQuotes ? this.dataset.fullText : this.dataset.text;
+        const mesid = $(this).closest('.quote-tts-stream-panel').data('mesid');
+        const mesEl = document.querySelector(`#chat .mes[mesid="${mesid}"]`);
+        const charName = mesEl ? getCharNameFromMessage(mesEl) : SillyTavern.getContext().name2 || '';
+
+        const fakeWrap = document.createElement('span');
+        fakeWrap.className = 'quote-tts-wrap';
+        const fakeBtn = document.createElement('span');
+        fakeBtn.className = 'quote-tts-btn';
+        fakeBtn.dataset.ttsText = this.dataset.text;
+        fakeBtn.dataset.ttsTextFull = this.dataset.fullText;
+        const fakeDl = document.createElement('span');
+        const fakeRegen = document.createElement('span');
+        fakeWrap.append(fakeBtn, fakeDl, fakeRegen);
+
+        const icon = this.querySelector('.fa-volume-high');
+        if (icon) icon.classList.add('playing');
+        generateAudio(text, charName).then(blob => {
+            if (icon) icon.classList.remove('playing');
+            if (!blob) return;
+            const url = URL.createObjectURL(blob);
+            audioCache.set(this.dataset.text, url);
+            const audio = new Audio(url);
+            audio.play();
+        }).catch(() => {
+            if (icon) icon.classList.remove('playing');
+        });
+    });
+
     processAllMessages();
+    initStreamingObserver();
 }
